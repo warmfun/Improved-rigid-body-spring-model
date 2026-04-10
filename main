@@ -1,0 +1,737 @@
+
+
+from math import  sqrt
+import numpy as np
+import matplotlib.pyplot as plt
+
+def divide_line(start, end, spr_num):  
+    startnew = start + (end - start) / spr_num / 2
+    endnew = end - (end - start) / spr_num / 2
+    return startnew, endnew
+
+def rot_matrix(angle):
+    matrix = np.array([[np.cos(angle), -np.sin(angle)],
+                       [np.sin(angle), np.cos(angle)]])
+    return matrix
+
+def length(vector):
+    x = vector[0]
+    y = vector[1]
+    return sqrt(x ** 2 + y ** 2)
+
+class Node:
+    def __init__(self, node_no, x, y, **spr):
+        self.node_no = node_no
+        self.sprs_para = spr
+        self.coord_loca = np.array([x, y]) 
+        self.tag = None
+        self.spr = None
+
+    @property
+    def x(self):
+        return self.node_pos[0]
+    
+    @property
+    def y(self):
+        return self.node_pos[1]
+    
+class Nodes:
+    def __init__(self,tag_nodes):
+        self.list = []
+        self.dic = {0: [], 1: [], 2: [], 3: [],11:[],12:[]}
+        self.spring = None
+        
+    def set_ini_Nodes(self):
+        self.list_pos0 = self.list_pos
+        for n in self.list:
+            n.node_pos0 = np.array([n.x, n.y])
+        
+    def addNode(self, Node, ele):
+        self.list.append(Node)
+        self.dic[Node.node_no].append(Node)
+        Node.ele = ele
+        Node.nodes = self
+
+    def addNewNode(self, nodes_list, ele):
+        self.list_loc_coord = np.array([[row[1], row[2]] for row in nodes_list])  
+        for i in nodes_list:
+            if len(i) == 3:
+                node_no = int(i[0])
+                x = i[1]
+                y = i[2]
+                self.addNode(Node(node_no, x, y), ele)
+            elif len(i) == 6:  
+                node_no = int(i[0])
+                x = i[1]
+                y = i[2]
+                d = i[3]
+                t = i[4]
+                tag = i[5]
+                self.addNode(Node(node_no, x, y, spr_d=d, spr_t=t,spr_a = d*t, spr_tag = tag), ele)
+
+            
+    def trans_node_list(self, ele_pos0):
+        translation = ele_pos0[0:2]  # [tx, ty]
+        self.list_pos = self.list_loc_coord + translation
+        for i, n in enumerate(self.list):
+            n.node_pos = self.list_pos[i] 
+            
+    def move_node_local(self,dis):
+        self.list_loc_coord = self.list_loc_coord.copy() + dis 
+        self.list_pos  = self.list_pos.copy() + dis           
+        for i, n in enumerate(self.list):
+            n.node_pos0 = self.list_pos[i]   
+            n.node_pos = self.list_pos[i]    
+        
+    def update_node_list(self, trans,move):
+        theta = trans[2]
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+        tx, ty = trans[0], trans[1]
+        R = np.array([[cos_t, -sin_t], [sin_t, cos_t]])
+        self.list_pos = self.list_loc_coord.dot(R.T) + np.array([tx, ty])
+        for i, n in enumerate(self.list):
+            n.node_pos = self.list_pos[i] 
+
+class section:
+    def __init__(self, section, num_springs):  
+        self.b = section['section']['b'] 
+        self.h = section['section']['h']           
+        h = self.h 
+        t = self.b 
+        
+        stat, end = divide_line(-h / 2, h / 2, num_springs)
+        spr_pos = np.linspace(stat, end, num_springs)
+        d = abs(spr_pos[1] - spr_pos[0]) 
+        
+        points = [[spr_pos[i], d, t,'web'] for i in range(num_springs)]  
+
+        self.num_springs = num_springs
+        self.spr_pos = points   
+ 
+class Spring:
+    def __init__(self, spr_no, point1, point2,c1,c2, ele_1, ele_2,tag ): 
+        self.tag = tag
+        self.d1 = point1.sprs_para['spr_d']  
+        self.d2 = point2.sprs_para['spr_d']
+        self.t1 = point1.sprs_para['spr_t'] 
+        self.t2 = point2.sprs_para['spr_t']
+        self.d1T = self.d1*self.t1
+        self.d2T = self.d2*self.t2
+        self.d1T0 = point1.sprs_para['spr_a']
+        self.d2T0 = point2.sprs_para['spr_a']
+        self.K_s = None
+        self.K_n = None
+        self.E = 210e9
+        self.v = 0.3
+        self.G = self.E/ (2 + 2 * self.v)
+        self.spr_no = spr_no
+        self.point1 = point1
+        self.point2 = point2
+        self.c1 = c1      
+        self.c2 = c2   
+        
+        
+        self.strain2d = np.array([0.,0.])
+        self.force_loc = np.zeros(2)
+        
+        self.ele_1 = ele_1
+        self.ele_2 = ele_2
+
+        self.vector_init = self.c2.node_pos - self.c1.node_pos 
+        self.spr_lenght0 = length(self.vector_init)   
+
+        self.point1.spr = self
+        self.point2.spr = self
+
+        self.ele_2.sprs[0].append(self)
+        self.ele_1.sprs[1].append(self)
+
+    @property
+    def N(self): 
+        sx1 = self.point1.coord_loca[0]
+        sy1 = self.point1.coord_loca[1]
+        sx2 = self.point2.coord_loca[0]
+        sy2 = self.point2.coord_loca[1]
+        N_linear = np.array([
+            [1, 0, -sy1, -1,  0,  sy2],  
+            [0, 1,  sx1,  0, -1, -sx2]])
+        N = N_linear
+        return N
+
+    @property
+    def vector(self):
+        return self.c2.node_pos - self.c1.node_pos
+
+    @property
+    def spr_lenght(self):
+        return length(self.vector) 
+
+    @property
+    def L(self):
+
+        ab = self.vector_init 
+        leng = length(ab)   
+        l = ab[0]/leng    # x/l cos
+        m = ab[1]/leng    # y/l sin
+        L = np.array([[l,m],[-m,l]]) 
+        return L 
+
+         
+    def set_K(self):
+        len_spr = self.ele_1.spr_l + self.ele_2.spr_l
+        self.K_n = 1.0 * (self.E * self.d1T) / len_spr
+        self.K_s = 1.0 * (self.G * self.d1T) / len_spr
+
+        self.D = np.array([[self.K_n,0],[0,self.K_s]])
+        self.LDL = self.L.T.dot(self.D).dot(self.L)
+        K_mat =  self.N.T.dot(self.LDL).dot(self.N)  # K = N.LDL.N
+        self.K_mat = K_mat
+        return K_mat
+
+    def update_spr(self): 
+        dU = np.insert(self.ele_2.dis_inc,0,self.ele_1.dis_inc)   
+        ds = self.L.dot(-self.N).dot( dU )  
+        strain_inc = ds/self.spr_lenght0 
+        self.strain2d += strain_inc  
+
+        self.force_loc += self.D.dot(ds)           
+        forcexy = self.L.T.dot(self.force_loc) 
+        
+        a = self.point1.coord_loca
+        b = self.point2.coord_loca
+        fx, fy = forcexy
+        
+        M1 = a[0] * fy - a[1] * fx
+        M2 = -b[0] * fy + b[1] * fx  
+
+        self.ele_1.int_force[0,:2] += forcexy
+        self.ele_1.int_force[0,2] += M1
+        
+        self.ele_2.int_force[0,:2] += -forcexy
+        self.ele_2.int_force[0,2] += M2
+
+
+class Springs:
+
+    def __init__(self):
+        self.list = []
+        self.dic = {}
+
+    def addSpring(self, spring):
+        self.list.append(spring)
+    def addNewSprings(self, sprlist):
+        for i in range(len(sprlist)):
+            spr_no = sprlist[i][0]
+            p1 = sprlist[i][1] 
+            p2 = sprlist[i][2]
+            c1 = sprlist[i][3]  
+            c2 = sprlist[i][4]
+            ele_1 = sprlist[i][5]
+            ele_2 = sprlist[i][6]
+            tag = sprlist[i][7]
+            self.addSpring(Spring(spr_no, p1, p2, c1, c2, ele_1, ele_2,tag))
+
+class Element:  
+    def __init__(self, ele_no, x, y, l, axis, offset):
+        self.tag_joint = None
+        self.ele_no = ele_no
+        self.l = l 
+        self.h = None
+        if offset == 0.:
+            self.spr_l = l / 2  
+        else:
+            self.spr_l = l 
+        self.axis = axis
+
+        self.offset = offset
+        self.sprs = [[],[]] 
+        self.sprs_joint = []
+        self.nodes_sprs = {0:None,1:None,2:None,3:None}
+        self.int_force = np.zeros((1,3)) 
+
+        self._dof = ("Ux","Uy","Phz")
+        self._nAk = ("Ux","Uy","Phz")
+        self._nBk = ("Fx","Fy","Mz")
+        self._fix = dict.fromkeys(self._dof,0.)    
+        self._disp = dict.fromkeys(self._nAk,0.)  
+        self._force = dict.fromkeys(self._nBk,0.)  
+        self._is_fix_added = False
+        self._is_force_added = False
+        self._is_disp_added = False
+        self._is_system_solved = False
+
+        self.movement = {'dis_delta': np.zeros((1, 3)),
+                         'dis': np.zeros((2, 3)),
+                         'pos': np.array([[x, y, 0.]])}   
+    @property
+    def dis_inc(self):
+        return self.movement['dis_delta'][-1]
+
+    @property
+    def ele_pos(self): 
+        return self.movement['pos'][-1][0:2]
+
+    def set_section(self, section_list,spr_num):
+
+        h = section_list['section']['h']
+        T = section_list['section']['b']
+        self.h = h  
+        self.T = T  
+        self.tag_sec = section_list['tag']  
+        self.nodes = {0: None, 1: None, 2: None, 3: None,'center':None,'vertices':None}
+        self.section = section(section_list,spr_num) 
+        self.spr_num = self.section.num_springs
+        
+    def set_nodes(self):
+        h = self.h
+        l = self.l
+        if self.offset == 0.:
+            self.spr_l = l / 2  
+        else:
+            self.spr_l = l 
+        vertices = Nodes('vertices')
+        if self.axis == 'x':
+            if self.offset == 0:  
+                node_list = [[0, -l / 2., -h / 2.0], [1, l / 2., -h / 2.-0], [2, l / 2., h / 2.-0], [3, -l / 2., h / 2.-0]]
+            elif self.offset == -1: 
+                node_list = [[0, 0., -h / 2.-0], [1, l, -h / 2.-0], [2, l, h / 2.-0], [3, 0., h / 2.-0]]
+            elif self.offset == 1:
+                node_list = [[0, -l, -h / 2.-0], [1, 0, -h / 2.-0], [2, 0, h / 2.-0], [3, -l, h / 2.-0]]
+        vertices.addNewNode(node_list, self)
+        self.nodes['vertices'] = vertices
+        self.nodes['vertices'].trans_node_list(self.movement['pos'][0])
+
+        sprpos = self.section.spr_pos 
+        if self.axis == 'x': 
+            X_pos_3 = self.nodes['vertices'].list_loc_coord[0][0] 
+            X_pos_1 = self.nodes['vertices'].list_loc_coord[1][0]  
+            center_pos = 0.  
+            center= Nodes('spring')
+            sprnodes_cen = [[11]  + [center_pos]+ [sublist[0] - 0] + sublist[1:] for sublist in sprpos] 
+            
+            center.addNewNode(sprnodes_cen, self)
+            center.trans_node_list(self.movement['pos'][0])
+            self.nodes['center'] = center
+            
+            sprs1 = Nodes('spring')
+            sprnodes1 = [[1]  + [X_pos_1]+ [sublist[0] - 0] + sublist[1:]  for sublist in sprpos]  
+            
+            sprs1.addNewNode(sprnodes1, self)
+            sprs1.trans_node_list(self.movement['pos'][0])
+            self.nodes[1] = sprs1
+            
+            sprs3 = Nodes('spring')
+            sprnodes3 = [[3]  + [X_pos_3]+ [sublist[0] - 0] + sublist[1:]  for sublist in sprpos] 
+
+            sprs3.addNewNode(sprnodes3, self)
+            sprs3.trans_node_list(self.movement['pos'][0])
+            self.nodes[3] = sprs3
+            
+    def update_Coord(self, **kwargs):
+
+        if 'dis' in kwargs:
+            dis = kwargs['dis']
+            move = 1 
+        elif 'commit' in kwargs:
+            dis = [0., 0., 0.]
+            move = 0 
+        else:
+            dis = [0., 0., 0.]
+            move = 0 
+        self.movement['pos'][-1, 0] += dis[0]
+        self.movement['pos'][-1, 1] += dis[1]
+        self.movement['pos'][-1, 2] += dis[2]
+
+        ele_pos_origin = self.movement['pos'][0]  
+        dis = self.movement['dis'][-1]  
+        trans = ele_pos_origin + dis
+
+        for n in self.nodes.values():
+            if n:  
+                n.update_node_list(trans,move)
+
+
+    def set_forces(self,**forces):  
+        for key in forces.keys():
+            if key in self._nBk:
+                self._force[key] = forces[key]
+            else:
+                raise AttributeError("Unknow focre name(%r)"%(forces,))
+        self._is_force_added = True            
+            
+    def set_fixdof(self,**fix):
+        for key in fix.keys():
+            if key in self._dof:
+                self._fix[key] = fix[key]
+            else:
+                raise AttributeError("Unknow fixdof name(%r)"%(fix,))
+        self._is_fix_added = True            
+            
+class Segment:
+    def __init__(self,tag):
+        self.element = []
+        self.dic = {}
+        self.slab = None
+        self.tagSegment = tag
+    def addElement(self, element):
+        self.element.append(element)
+    def addNewElements(self, ele_list):
+        no = 0
+        for i in ele_list:
+            ele_no = no 
+            x = i[0]
+            y = i[1]
+            l = i[2]
+            axis = i[3]
+            offset = i[4] 
+            no += 1
+            self.addElement(Element(ele_no, x, y, l, axis, offset))
+        self.tag = axis
+    def add_section(self, section,spr_num):
+
+        for e in self.element:
+            e.set_section(section,spr_num)
+            e.set_nodes()
+
+    def add_springs(self, Links): 
+        no = 0
+        sprlist = []
+        for e in Links:
+            axis2no = {-2: 0, 1: 1, 2: 2, -1: 3} 
+            E1 = self.element[e[0]]
+            E2 = self.element[e[1]]
+            axis1 = axis2no[e[2]]
+            axis2 = axis2no[-e[2]]
+            nodes1 = E1.nodes[axis1]   
+            nodes1.spring = True               
+            p1s = nodes1.list
+            p1c = E1.nodes['center'].list  
+            nodes2 = E2.nodes[axis2]
+            nodes2.spring = True             
+            p2s = nodes2.list
+            p2c = E2.nodes['center'].list  
+            for i in range(len(p1s)):
+                p1 = p1s[i]
+                c1 = p1c[i]
+                p2 = p2s[i]
+                c2 = p2c[i]
+                sprlist.append([no, p1, p2,c1,c2, E1, E2,None])
+                no += 1
+        springs = Springs()
+        springs.addNewSprings(sprlist)
+        self.spring_mat = springs.list
+        
+        for e in self.element:
+            sprs_vertex = {0:None,1:None,2:None,3:None} 
+            for key, nodes in e.nodes.items():
+                if nodes != None and nodes.spring == True:
+                        e.nodes_sprs[key] = nodes    
+                        if key == 1:
+                            sprs_vertex[1] = nodes.list[0].spr
+                            sprs_vertex[2] = nodes.list[-1].spr
+                        elif key == 3:
+                            sprs_vertex[0] = nodes.list[0].spr
+                            sprs_vertex[3] = nodes.list[-1].spr
+                        elif key == 0:
+                            sprs_vertex[0] = nodes.list[0].spr
+                            sprs_vertex[1] = nodes.list[-1].spr
+                        elif key == 2:
+                            sprs_vertex[3] = nodes.list[0].spr
+                            sprs_vertex[2] = nodes.list[-1].spr
+
+    def updatecoord(self):
+        for e in self.element:
+            e.update_Coord()  
+            e.int_force = np.zeros((1,3))  
+
+class System:
+    def __init__(self, beam_list_yx):
+        self.Segments = [item for sublist in beam_list_yx for item in sublist]
+        self.Beams = beam_list_yx
+        self.element = [e for i in self.Segments for e in i.element]
+        self.spring_mat = [s for i in self.Segments for s in i.spring_mat]
+        self.num_ele = len(self.element)  
+        self.load_Displacement = None
+        self.dofs_fixed = None           
+        self.dofs_prescribed = []   
+        self.load_apply_sum = np.zeros(3*self.num_ele) 
+        self.Inter_Force_sum = np.zeros(3*self.num_ele)  
+        self.Unbanlance_force = np.zeros(3*self.num_ele)    
+        self._is_fix_added = False
+        self._is_force_added = False
+        self._is_disp_added = False
+        self.Force_array = np.zeros((1, 3))
+        self.ele_fixed = []
+        self.ele_loaded_F = []
+        for i, e in enumerate(self.element):
+            e.ele_no = i
+
+    def set_ini_sys(self):
+        all_nodes = [ns for e in self.element for ns in e.nodes.values() if ns is not None]
+        for node in all_nodes:
+            node.set_ini_Nodes()
+    
+    def add_ele_fix(self,eid,**fix):   
+        
+        self.element[eid].set_fixdof(**fix)    
+        self._is_fix_added = True 
+        fixdof = [ele._fix for ele in self.element]
+        dofs_fixed = [val[key] for val in fixdof for key in self.element[0]._dof]       
+        self.dofs_fixed = [index for index, value in enumerate(dofs_fixed) if value !=0]   
+        self.dofs_all = np.arange(3*self.num_ele)
+        self.dofs_free = np.setdiff1d(self.dofs_all, self.dofs_fixed)
+        self.ele_fixed.append(self.element[eid])
+        
+
+    def add_ele_forces(self,eid, **forces):
+       
+        self.element[eid].set_forces(**forces)    
+        self._is_force_added = True
+        Force = [ele._force for ele in self.element]
+        Forcevector = [val[key] for val in Force for key in self.element[0]._nBk] 
+        self.load_Foce_step = np.array(Forcevector)
+        self.ele_loaded_F.append(self.element[eid])
+
+    def getreduce(self,input_var):
+        if isinstance(input_var, np.ndarray) and input_var.ndim == 2 and input_var.shape[0] == input_var.shape[1]:
+           
+            var_reduced = input_var[np.ix_(self.dofs_free, self.dofs_free)]
+        else:
+           
+            var_reduced = input_var[np.ix_(self.dofs_free)]
+        return var_reduced
+    
+    def getfull_vector(self,vector_reduced):
+        if vector_reduced.ndim ==1: 
+            vector_reduced = vector_reduced.reshape(-1, 1)  
+        vector_full = np.zeros((3*self.num_ele,1))
+        vector_full[self.dofs_free] = vector_reduced
+        return vector_full
+
+    def add_global_k(self):
+        global_mat = np.zeros((3 * self.num_ele, 3 * self.num_ele)) 
+        for i, spr in enumerate(self.spring_mat ):
+            spr_mat = spr.set_K()
+            spr.K_c = spr_mat
+            ele_i = spr.ele_1.ele_no
+            ele_j = spr.ele_2.ele_no
+            lv = np.array([[(ele_i * 3), (ele_i * 3 + 1), (ele_i * 3 + 2), (ele_j * 3), (ele_j * 3 + 1), (ele_j * 3 + 2)]])
+            global_mat[lv.T, lv] = global_mat[lv.T, lv] + spr_mat
+        self.K = global_mat
+        return global_mat
+
+    def Newton_Raphson(self, load_apply_sum):
+
+        tolerance = 1e-5
+        max_iterations = 20
+        converged = False
+        Unbalance_force = None
+    
+        for iteration in range(1, max_iterations + 1):
+           
+            R = load_apply_sum + self.Inter_Force_sum  
+            err = np.linalg.norm(R)
+    
+            if err < tolerance:
+                print(f"收敛于迭代 {iteration}，误差 = {err:.6e} < {tolerance}")
+                converged = True
+                Unbalance_force = np.zeros(3 * self.num_ele)
+                break
+    
+            K_full = self.add_global_k().copy()   # 获取整体刚度矩阵
+            K_reduced = self.getreduce(K_full)    # 缩减（消除约束自由度）
+            R_reduced = self.getreduce(R)
+    
+            try:
+                dU_reduced = np.linalg.solve(K_reduced, R_reduced)
+            except np.linalg.LinAlgError as e:
+                print(f"求解失败：刚度矩阵奇异。{e}")
+                Unbalance_force = R
+                return Unbalance_force
+
+            dU = self.getfull_vector(dU_reduced)
+
+            self.SYSUPDATE(dU=dU)
+    
+        else:
+
+            print(f"警告：迭代 {max_iterations} 次后未收敛，最后不平衡力范数 = {err:.6e}")
+            Unbalance_force = R   # 注意：R 是最后一次迭代的不平衡力
+    
+        print("="*50 + "\n")
+        return Unbalance_force 
+
+    def Solve(self):
+        self.force_degree = np.nonzero(self.load_Foce_step)[0]
+        self.load_apply_sum += self.load_Foce_step + self.Unbanlance_force  
+        self.Unbanlance_force = self.Newton_Raphson(self.load_apply_sum)
+        force_ = self.load_apply_sum 
+        force = sum(force_.reshape( self.num_ele,3))    
+        self.Force_array = np.vstack((self.Force_array, force )) 
+        self.commitState()
+
+    def SYSUPDATE(self,**dis):
+        i = 0 
+        for e in self.element:
+            e.movement['dis_delta'][-1]  = dis['dU'][3 * i: 3 * i + 3].T  
+            e.movement['dis'][-1]  =  e.movement['dis'][-1] + dis['dU'][3 * i: 3 * i + 3].T      
+            e.movement['pos'][-1]  =  e.movement['pos'][0] + e.movement['dis'][-1]       
+            i +=1
+
+        for seg in self.Segments:
+            seg.updatecoord()   
+        for s in self.spring_mat: 
+            s.update_spr()  
+
+        Inter_Force = [force for ele in self.element for force in ele.int_force.flatten()]
+        Inter_Force = np.array(Inter_Force) 
+
+        for i in self.dofs_fixed + self.dofs_prescribed  : 
+            Inter_Force[i] = 0
+        self.Inter_Force_sum = Inter_Force   
+
+    def commitState(self):
+        for e in self.element:
+            e.movement['dis_delta'] = np.concatenate((e.movement['dis_delta'], [e.movement['dis_delta'][-1]]))
+            e.movement['dis'] = np.concatenate((e.movement['dis'], [e.movement['dis'][-1]]))
+            e.movement['pos'] = np.concatenate((e.movement['pos'], [e.movement['pos'][-1]]))
+
+
+def main():
+    def plot_deform(sys):
+        for e in sys.element:  
+            plt.plot(e.movement['pos'][-1][0], e.movement['pos'][-1][1], 'bo',markersize=5) # 当前位置
+            # plt.text(e.movement['pos'][-1][0], e.movement['pos'][-1][1], e.ele_no, fontsize=10)  #'编号'
+            'ele edg and vertices'
+            vertice = e.nodes['vertices'].list_pos
+            vertices  = np.vstack((vertice, vertice[0,:]))    
+            plt.plot(vertices[:,0], vertices[:,1], linewidth=1, color='k',linestyle="-")  # 当前 
+            
+            vertice0 = e.nodes['vertices'].list_pos0
+            vertices0  = np.vstack((vertice0, vertice0[0,:]))  
+            plt.plot(vertices0[:,0], vertices0[:,1], linewidth=1, color='k',linestyle="--")  # 初始
+            
+            'sprnodes plot'
+            for n in e.nodes_sprs.values():
+                if n:  
+                    plt.plot(n.list_pos[:,0],n.list_pos[:,1],'ro', markersize=1)
+            '约束标记'
+            if e._is_fix_added == True:
+                plt.plot(e.movement['pos'][0][0], e.movement['pos'][0][1], 'kx') # fix
+            if e._is_force_added == True:
+                plt.plot(e.movement['pos'][0][0], e.movement['pos'][0][1], 'kv') # load
+    
+        plt.axis('equal')
+        
+    def beammesh(lenght, h,num, axis):
+        axis_dic = {'x': 1, '-x': -1, 'y': 2, '-y': -2, }
+
+        nodes = np.linspace(0, lenght, num + 1)
+        L = lenght / num
+        if axis == 'x':
+            eles = [[x, 0, L, axis, 0] for x in nodes] 
+        if axis == 'y':
+            eles = [[0, y, L, axis, 0] for y in nodes]
+        eles[0][2] = L / 2
+        eles[0][-1] = -1 
+        eles[-1][2] = L / 2
+        eles[-1][-1] = 1 
+        Links = [(i, i + 1, axis_dic[axis]) for i in range(0, num)]  # ele1, ele2 ,axis
+    
+        return eles, Links  
+    
+    m = 1.0
+    mm = m * 1e-3
+    N = 1.0
+    kN = 1e3*N
+    Pa = 1.0
+    MPa = 1e6*Pa
+    GPa = 1e3*MPa
+
+    " beam section "
+    
+    b= 100*mm 
+    h = 200*mm  
+    beamspan = 3000*mm  
+    E = 210*GPa 
+    v = 0.3  
+    
+    spr_num = 10  
+    ele_num = 6
+    
+    Eles_beam, Links_beam  = beammesh(beamspan, h,ele_num, 'x')
+    
+    rectangle = {'b':b,'h':h,'mat':{'E':E,'v':v}}
+    beam_section = { 'tag':'rectangle','section':rectangle, }
+    
+    beam0 = Segment('beam')
+    beam0.addNewElements(Eles_beam)
+    beam0.add_section(beam_section,spr_num)  
+    beam0.add_springs(Links_beam) 
+
+    beam_list_yx = []    
+    beam_list_yx.append([beam0])      
+    
+    sys = System(beam_list_yx) 
+    
+    Beams = sys.Beams[0][0]
+    beam_ends = [Beams.element[0].ele_no ,Beams.element[-1].ele_no]  
+    beamend = [beam_ends[-1]]
+    
+    fix = beam_ends
+    
+    sys.add_ele_fix(fix[0],Ux=1,Uy=1,Phz=1) 
+    load_ele = beamend
+    
+    load_F = -0.55*kN   
+
+    for e in load_ele:
+        sys.add_ele_forces(e, Fy = load_F)   
+
+    ele_plot = sys.element[-1]
+    
+    sys.set_ini_sys()
+    
+    i = 0
+    
+    '求解'
+    while True:
+        sys.Solve()  
+        i += 1 
+        if i >=300:
+            break
+    
+    'theroy'
+    EI = E* b * h ** 3 / 12
+    delta = load_F*i*beamspan**3/3/EI
+    
+    plot_deform(sys)
+    
+    xarray = np.linspace(0, 0.05)
+    dis_load = ele_plot.movement['dis'][:-1]
+    delta_ = dis_load[-1][1]
+    
+    plt.figure()
+    'δ/L,PL**2/EI'
+    plt.plot(-(dis_load[:, 1]/beamspan), -(sys.Force_array[:, 1]*beamspan**2/EI),'r-',label = 'result')   
+    plt.plot(xarray, xarray*3,'k--',label = 'theroy')   
+    
+    plt.grid()
+    plt.legend()
+    plt.xlabel(' δ/L ')
+    plt.ylabel('FL**2/EI ')
+    plt.title("delfection vs force " )
+    plt.show()
+    
+    
+    
+if __name__ == "__main__":
+    main()
+
+
+    
+
+
+
+
+
