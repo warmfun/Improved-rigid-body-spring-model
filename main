@@ -1,5 +1,4 @@
 
-
 from math import  sqrt
 import numpy as np
 import matplotlib.pyplot as plt
@@ -623,11 +622,12 @@ def main():
     
         plt.axis('equal')
         
-    def beammesh(lenght, h,num, axis):
+    def beammesh(lenght,num, axis):
         axis_dic = {'x': 1, '-x': -1, 'y': 2, '-y': -2, }
 
         nodes = np.linspace(0, lenght, num + 1)
         L = lenght / num
+        
         if axis == 'x':
             eles = [[x, 0, L, axis, 0] for x in nodes] 
         if axis == 'y':
@@ -656,10 +656,10 @@ def main():
     E = 210*GPa 
     v = 0.3  
     
-    spr_num = 10  
+    spr_num = 20  
     ele_num = 6
     
-    Eles_beam, Links_beam  = beammesh(beamspan, h,ele_num, 'x')
+    Eles_beam, Links_beam  = beammesh(beamspan,ele_num, 'x')
     
     rectangle = {'b':b,'h':h,'mat':{'E':E,'v':v}}
     beam_section = { 'tag':'rectangle','section':rectangle, }
