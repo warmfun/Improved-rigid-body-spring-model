@@ -8,16 +8,14 @@ Date: April 2026
 License: MIT License (Open Source)
 
 Description:
-This script provides a fundamental implementation of the pure Fiber-RBSM 
+This script provides a fundamental implementation of RBSM 
 for a cantilever beam under concentrated tip load. 
 
 
 Key Theoretical Features:
-1. Timoshenko Equivalent: The model naturally incorporates shear deformation 
-   (k_s = GA/L), matching Timoshenko beam theory rather than Euler-Bernoulli.
-2. Extensible Framework: While configured for linear-elastic small deformation, 
+1. Extensible Framework: While configured for linear-elastic small deformation, 
    the Newton-Raphson iterative structure is preserved to allow users to easily 
-   extend it to material nonlinearity (fiber yielding/cracking).
+   extend it to material nonlinearity (spring yielding/cracking).
 
 ==============================================================================
 """
@@ -25,7 +23,7 @@ Key Theoretical Features:
 import numpy as np
 import matplotlib.pyplot as plt
 
-def solve_small_deflection_cantilever():
+def solve_small_deflection_cantilever(ele_num = 11, spr_num = 20):
     # ==========================================
     # 1. Physical Parameters (Cantilever Beam)
     # ==========================================
@@ -37,14 +35,13 @@ def solve_small_deflection_cantilever():
     G = E / (2 * (1 + v)) # Shear Modulus (Pa)
 
     # Discretization
-    n_bodies = 11       # Number of rigid bodies
-    n_springs = 10      # Number of interface spring boundaries
-    n_fibers = 10       # Number of fibers per cross-section
+    n_bodies = ele_num       # Number of rigid bodies
+    n_springs = spr_num       # Number of springs per cross-section
     n_dofs = n_bodies * 3
 
-    L_e = L_total / n_springs  # Distance between adjacent rigid body centroids
-    dy = h / n_fibers          # Fiber height
-    dA = b * dy                # Fiber area
+    L_e = L_total / (n_bodies-1)  # Distance between adjacent rigid body centroids
+    dy = h / n_springs          # spring height
+    dA = b * dy                # spring area
 
     # Load Stepping
     load_steps = 300
@@ -57,14 +54,14 @@ def solve_small_deflection_cantilever():
     sx1 = L_e / 2
     sx2 = -L_e / 2
 
-    # Normal eccentricity of each fiber relative to the neutral axis
-    sy = np.array([-h/2 + dy/2 + j*dy for j in range(n_fibers)])
+    # Normal eccentricity of each spring relative to the neutral axis
+    sy = np.array([-h/2 + dy/2 + j*dy for j in range(n_springs)])
 
-    # Linear elastic stiffness of a single micro-fiber
+    # Linear elastic stiffness of a single spring
     k_n = E * dA / L_e
     k_s = G * dA / L_e
     
-    # Local constitutive matrix for a fiber: D = diag(k_n, k_s)
+    # Local constitutive matrix for a spring: D = diag(k_n, k_s)
     D = np.array([[k_n, 0], [0, k_s]])
 
     # ==========================================
@@ -107,12 +104,12 @@ def solve_small_deflection_cantilever():
 
             # Assemble Global Tangent Stiffness Matrix
             K_T = np.zeros((n_dofs, n_dofs))
-            for i in range(n_springs):
+            for i in range(n_bodies-1):
                 idx = [3*i, 3*i+1, 3*i+2, 3*(i+1), 3*(i+1)+1, 3*(i+1)+2]
                 
                 for y_i in sy:
                     # Kinematic Mapping Matrix (Small Deformation)
-                    # Maps rigid body DOFs to local fiber deformations (dn, ds)
+                    # Maps rigid body DOFs to local spring deformations (dn, ds)
                     N = np.array([
                         [1, 0, -y_i, -1,  0,  y_i],  # Normal deformation mapping
                         [0, 1,  sx1,  0, -1, -sx2]   # Shear deformation mapping
@@ -129,7 +126,7 @@ def solve_small_deflection_cantilever():
             U += dU
 
             # Update State: Internal Force Integration
-            for i in range(n_springs):
+            for i in range(n_bodies-1):
                 idx = [3*i, 3*i+1, 3*i+2, 3*(i+1), 3*(i+1)+1, 3*(i+1)+2]
                 dU_local = dU[idx]
 
@@ -138,14 +135,14 @@ def solve_small_deflection_cantilever():
                         [1, 0, -y_i, -1,  0,  y_i],  
                         [0, 1,  sx1,  0, -1, -sx2]
                     ])
-                    # Fiber deformation increment: ds = -N * dU
+                    # spring deformation increment: ds = -N * dU
                     ds = -N @ dU_local
                     
-                    # Fiber force increment: df = D * ds
+                    # spring force increment: df = D * ds
                     # (Users can replace this with a nonlinear material law: E_t)
                     df = D @ ds
                     
-                    # Map fiber forces back to rigid body centroids
+                    # Map spring forces back to rigid body centroids
                     F_int[idx] += N.T @ df
 
         # Record data for plotting
@@ -167,22 +164,22 @@ def solve_small_deflection_cantilever():
     # Non-dimensionalization
     x_val = -tip_deflections / L_total
     y_val = -(forces * L_total**2) / (E * I)
-
+    
     # Set up publication-style plot
     plt.figure(figsize=(7, 5), dpi=300)
     
     # Plot RBSM Result
-    plt.plot(x_val, y_val, 'r-', linewidth=2.0, label='Fiber-RBSM (Small Def.)')
+    plt.plot(x_val, y_val, 'r-', linewidth=2.0, label='RBSM (Small Def.)')
 
     # Plot Linear Euler Theory: delta = P L^3 / 3EI -> P L^2 / EI = 3 * (delta/L)
     x_theory = np.linspace(0, max(x_val), 100)
     plt.plot(x_theory, x_theory * 3, 'k--', linewidth=1.5, label='Euler Beam Theory ($y=3x$)')
     
-    # Plot Timoshenko Theory (kappa = 1.0)
-    # delta = PL^3/3EI + PL/GA
-    delta_timo = (forces * L_total**3)/(3*E*I) + (forces * L_total)/(G*A)
-    x_timo = -delta_timo / L_total
-    plt.plot(x_timo, y_val, 'b:', linewidth=2.0, label='Timoshenko Theory')
+    # Plot Timoshenko Theory (kappa = 1.0)  # delta = PL^3/3EI + PL/GA
+    
+    # delta_timo = (forces * L_total**3)/(3*E*I) + (forces * L_total)/(G*A)
+    # x_timo = -delta_timo / L_total
+    # plt.plot(x_timo, y_val, 'b:', linewidth=2.0, label='Timoshenko Theory')
 
     plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend(fontsize=10, loc='upper left')
@@ -192,6 +189,16 @@ def solve_small_deflection_cantilever():
     
     plt.tight_layout()
     plt.show()
+    
+    result = y_val[-1]/x_val[-1]
+
+    print('err%=',(result-3)/3)
 
 if __name__ == "__main__":
-    solve_small_deflection_cantilever()
+    
+    ele_num = 11
+    spr_num = 20
+    solve_small_deflection_cantilever(ele_num , spr_num )
+
+    
+    
